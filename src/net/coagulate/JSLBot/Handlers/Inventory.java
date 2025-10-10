@@ -109,10 +109,51 @@ public class Inventory extends Handler implements Runnable {
 			}
 			for (final Atomic itemmap: inneritems.get()) {
 				@Nonnull final LLSDMap item=(LLSDMap)itemmap;
-				final LLUUID itemId=((LLSDUUID)item.get("item_id")).toLLUUID();
-				final LLUUID parentId=((LLSDUUID)item.get("parent_id")).toLLUUID();
+				 // GS DEBUG 
+				 //System.out.println("item_id type: " + 
+                 //  (item.get("item_id") != null ? item.get("item_id").getClass() : "null"));
+				 // Safely extract item_id
+				Object itemIdObj = item.get("item_id");
+				final LLUUID itemId;
+				if (itemIdObj instanceof LLSDUUID) {
+					itemId = ((LLSDUUID) itemIdObj).toLLUUID();
+				} else if (itemIdObj instanceof LLSDString) {
+					itemId = new LLUUID(((LLSDString) itemIdObj).toString());
+				} else {
+					throw new ClassCastException("Unexpected type for item_id: " +
+												 (itemIdObj != null ? itemIdObj.getClass() : "null"));
+				}
+				//final LLUUID itemId=((LLSDUUID)item.get("item_id")).toLLUUID();
+				//System.out.println("parent_id type: " + 
+                //  (item.get("parent_id") != null ? item.get("parent_id").getClass() : "null"));
+				 // Safely extract parent_id
+				Object parentIdObj = item.get("parent_id");
+				final LLUUID parentId;
+				if (parentIdObj instanceof LLSDUUID) {
+					parentId = ((LLSDUUID) parentIdObj).toLLUUID();
+				} else if (parentIdObj instanceof LLSDString) {
+					parentId = new LLUUID(((LLSDString) parentIdObj).toString());
+				} else {
+					throw new ClassCastException("Unexpected type for parent_id: " +
+												 (parentIdObj != null ? parentIdObj.getClass() : "null"));
+				}
+				//final LLUUID parentId=((LLSDUUID)item.get("parent_id")).toLLUUID();
 				final String name=item.get("name").toString();
-				final LLUUID assetId=((LLSDUUID)item.get("asset_id")).toLLUUID();
+				//GSDEBUG
+				//System.out.println("asset_id type: " + 
+                //   (item.get("asset_id") != null ? item.get("asset_id").getClass() : "null"));
+				 // Safely extract asset_id
+				Object assetIdObj = item.get("asset_id");
+				final LLUUID assetId;
+				if (assetIdObj instanceof LLSDUUID) {
+					assetId = ((LLSDUUID) assetIdObj).toLLUUID();
+				} else if (assetIdObj instanceof LLSDString) {
+					assetId = new LLUUID(((LLSDString) assetIdObj).toString());
+				} else {
+					throw new ClassCastException("Unexpected type for asset_id: " +
+												 (assetIdObj != null ? assetIdObj.getClass() : "null"));
+				}
+				//final LLUUID assetId=((LLSDUUID)item.get("asset_id")).toLLUUID();
 				final int type=((LLSDInteger)(item.get("type"))).get();
 				final int invType=((LLSDInteger)(item.get("inv_type"))).get();
 				final String desc=item.get("desc").toString();
@@ -129,9 +170,48 @@ public class Inventory extends Handler implements Runnable {
 				//System.out.println(category.toXML());
 				query.add(new LLUUID(category.get("category_id").toString()));
 				final int typeDefault=((LLSDInteger)(category.get("type_default"))).get();
-				final LLUUID agentId=((LLSDUUID)(category.get("agent_id"))).toLLUUID();
-				final LLUUID categoryId=((LLSDUUID)(category.get("category_id"))).toLLUUID();
-				final LLUUID parentId=((LLSDUUID)(category.get("parent_id"))).toLLUUID();
+
+				 // GS DEBUG 
+
+				// Safely extract agent_id
+				Object agentIdObj = category.get("agent_id");
+				final LLUUID agentId;
+				if (agentIdObj instanceof LLSDUUID) {
+					agentId = ((LLSDUUID) agentIdObj).toLLUUID();
+				} else if (agentIdObj instanceof LLSDString) {
+					agentId = new LLUUID(((LLSDString) agentIdObj).toString());
+				} else {
+					throw new ClassCastException("Unexpected type for agent_id: " +
+													(agentIdObj != null ? agentIdObj.getClass() : "null"));
+				}
+				// Safely extract category_id
+				Object categoryIdObj = category.get("category_id");
+				final LLUUID categoryId;
+				if (categoryIdObj instanceof LLSDUUID) {
+					categoryId = ((LLSDUUID) categoryIdObj).toLLUUID();
+				} else if (categoryIdObj instanceof LLSDString) {
+					categoryId = new LLUUID(((LLSDString) categoryIdObj).toString());
+				} else {
+					throw new ClassCastException("Unexpected type for category_id: " +
+													(categoryIdObj != null ? categoryIdObj.getClass() : "null"));
+				}
+
+				// Safely extract parent_id
+				Object parentIdObj = category.get("parent_id");
+				final LLUUID parentId;
+				if (parentIdObj instanceof LLSDUUID) {
+					parentId = ((LLSDUUID) parentIdObj).toLLUUID();
+				} else if (parentIdObj instanceof LLSDString) {
+					parentId = new LLUUID(((LLSDString) parentIdObj).toString());
+				} else {
+					throw new ClassCastException("Unexpected type for parent_id: " +
+													(parentIdObj != null ? parentIdObj.getClass() : "null"));
+				}
+				//final LLUUID agentId=((LLSDUUID)(category.get("agent_id"))).toLLUUID();
+				//final LLUUID categoryId=((LLSDUUID)(category.get("category_id"))).toLLUUID();
+				//final LLUUID parentId=((LLSDUUID)(category.get("parent_id"))).toLLUUID();
+
+				//End GS DEBUG
 				final String name=category.get("name").toString();
 				final int version=((LLSDInteger)(category.get("version"))).get();
 				processCategory(typeDefault,agentId,categoryId,parentId,name,version);
