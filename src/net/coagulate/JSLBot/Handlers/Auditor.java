@@ -96,15 +96,34 @@ public class Auditor extends Handler implements Runnable {
 	public void objectPropertiesFamilyUDPImmediate(@Nonnull final UDPEvent event) {
 		@Nonnull final ObjectPropertiesFamily object=(ObjectPropertiesFamily)event.body();
 		int nextOwnerMask = object.bobjectdata.vnextownermask.value;
+		int everyoneMask = object.bobjectdata.veveryonemask.value;
+		int groupMask = object.bobjectdata.vgroupmask.value;
+
 		LLUUID objectId = object.bobjectdata.vobjectid;
 		String name = object.bobjectdata.vname.toString();
 
-		boolean hasTransfer = (nextOwnerMask & 0x00002000) != 0;
-		boolean hasCopy = (nextOwnerMask & 0x00008000) != 0;
-		boolean flagBoth = hasTransfer && hasCopy;
+		boolean publicTheft = (everyoneMask & 0x00008000) != 0;
+		boolean publicGriefing = (everyoneMask & 0x00080000) != 0;
+		boolean groupTheft = (groupMask & 0x00008000) != 0;
+		boolean groupTampering = (groupMask & 0x00004000) != 0;
 
-		if (flagBoth) {
-			String reason = "Root Object Copy+Transfer";
+		boolean noTransfer = (nextOwnerMask & 0x00002000) != 0;
+		boolean noCopy = (nextOwnerMask & 0x00008000) != 0;
+		boolean noModify = (nextOwnerMask & 0x00004000) != 0;
+
+		boolean accidentalFullPerm = publicTheft && (noCopy && noTransfer && noModify);
+
+		// Note: We don't have invType here, so we skip the script specific checks
+		// for the root object since it's an object, not a script item.
+
+		if (publicTheft || publicGriefing || groupTheft || groupTampering || accidentalFullPerm) {
+			String reason = "";
+			if (publicTheft) reason += "Root Object Public Theft Risk ";
+			if (publicGriefing) reason += "Root Object Public Griefing Risk ";
+			if (groupTheft) reason += "Root Object Group Theft Risk ";
+			if (groupTampering) reason += "Root Object Group Tampering Risk ";
+			if (accidentalFullPerm) reason += "Root Object IP Risk: Accidental Full Perm ";
+
 			System.out.println("VULNERABILITY FOUND: " + name + " - " + reason);
 			String owner = object.bobjectdata.vownerid.toString();
 			ObjectData od = event.region().getObject(object.bobjectdata.vobjectid);
@@ -141,6 +160,14 @@ public class Auditor extends Handler implements Runnable {
 			for (float x = GRID_MIN_X; x <= GRID_MAX_X; x += GRID_STEP) {
 				for (float y = GRID_MIN_Y; y <= GRID_MAX_Y; y += GRID_STEP) {
 					if (!isAuditing.get()) return;
+					// Physically teleport the bot to ensure object discovery streams all sim objects
+					TeleportLocationRequest tp = new TeleportLocationRequest(bot);
+					tp.binfo.vposition = new LLVector3(x, y, 50.0f);
+					tp.binfo.vlookat = new LLVector3(x + 1.0f, y, 50.0f);
+					tp.binfo.vregionhandle = new U64();
+					tp.binfo.vregionhandle.value = bot.getRegional().handle();
+					bot.send(tp, true);
+
 					bot.setPos(x, y, 50.0f); // Default height
 					bot.forceAgentUpdate();
 					System.out.println("Sweeping position: " + x + ", " + y + " | Objects reviewed: " + processedObjects.size());
@@ -341,12 +368,22 @@ public class Auditor extends Handler implements Runnable {
 										int invType = ((LLSDInteger)item.get("inv_type")).get();
 										int type = ((LLSDInteger)item.get("type")).get();
 										int nextOwnerMask = 0;
+										int everyoneMask = 0;
+										int groupMask = 0;
 										Atomic permissions = item.get("permissions");
 										if (permissions instanceof LLSDMap) {
 											LLSDMap permsMap = (LLSDMap)permissions;
 											Atomic nextOwnerAtomic = permsMap.get("next_owner_mask");
 											if (nextOwnerAtomic instanceof LLSDInteger) {
 												nextOwnerMask = ((LLSDInteger)nextOwnerAtomic).get();
+											}
+											Atomic everyoneAtomic = permsMap.get("everyone_mask");
+											if (everyoneAtomic instanceof LLSDInteger) {
+												everyoneMask = ((LLSDInteger)everyoneAtomic).get();
+											}
+											Atomic groupAtomic = permsMap.get("group_mask");
+											if (groupAtomic instanceof LLSDInteger) {
+												groupMask = ((LLSDInteger)groupAtomic).get();
 											}
 										}
 
@@ -357,17 +394,32 @@ public class Auditor extends Handler implements Runnable {
 										// PERM_TRANSFER = 0x00002000 (8192)
 										// PERM_COPY =     0x00008000 (32768)
 										// PERM_MODIFY =   0x00004000 (16384)
-										boolean hasTransfer = (nextOwnerMask & 0x00002000) != 0;
-										boolean hasCopy = (nextOwnerMask & 0x00008000) != 0;
-										boolean hasModify = (nextOwnerMask & 0x00004000) != 0;
+										// PERM_MOVE =     0x00080000 (524288)
 
-										boolean flagBoth = hasTransfer && hasCopy;
-										boolean flagScript = (invType == 10 && hasModify); // LSL Script type is 10
+										boolean publicTheft = (everyoneMask & 0x00008000) != 0;
+										boolean publicGriefing = (everyoneMask & 0x00080000) != 0;
+										boolean groupTheft = (groupMask & 0x00008000) != 0;
+										boolean groupTampering = (groupMask & 0x00004000) != 0;
 
-										if (flagBoth || flagScript) {
+										boolean noTransfer = (nextOwnerMask & 0x00002000) != 0;
+										boolean noCopy = (nextOwnerMask & 0x00008000) != 0;
+										boolean noModify = (nextOwnerMask & 0x00004000) != 0;
+
+										boolean accidentalFullPerm = publicTheft && (noCopy && noTransfer && noModify);
+
+										boolean isScript = (invType == 10);
+										boolean liveScriptTampering = isScript && ((groupMask & 0x00004000) != 0 || (everyoneMask & 0x00004000) != 0);
+										boolean sourceCodeLeak = isScript && noModify;
+
+										if (publicTheft || publicGriefing || groupTheft || groupTampering || accidentalFullPerm || liveScriptTampering || sourceCodeLeak) {
 											String reason = "";
-											if (flagBoth) reason += "Copy+Transfer ";
-											if (flagScript) reason += "Modifiable Script ";
+											if (publicTheft) reason += "Public Theft Risk ";
+											if (publicGriefing) reason += "Public Griefing Risk ";
+											if (groupTheft) reason += "Group Theft Risk ";
+											if (groupTampering) reason += "Group Tampering Risk ";
+											if (accidentalFullPerm) reason += "IP Risk: Accidental Full Perm ";
+											if (liveScriptTampering) reason += "Live Script Tampering Risk ";
+											if (sourceCodeLeak) reason += "IP Risk: Exposed LSL Source Code ";
 
 											System.out.println("VULNERABILITY FOUND: " + name + " - " + reason);
 											LLUUID objId = new LLUUID(objectUUID);
