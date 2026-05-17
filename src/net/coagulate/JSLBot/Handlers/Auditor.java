@@ -160,6 +160,13 @@ public class Auditor extends Handler implements Runnable {
 		if (isAuditing.compareAndSet(false, true)) {
 			SimpleDateFormat sdf = new SimpleDateFormat("yyyyMMdd_HHmmss");
 			currentAuditReportFile = "audit_report_" + sdf.format(new Date()) + ".csv";
+
+			try (PrintWriter out = new PrintWriter(new FileWriter(currentAuditReportFile, false))) {
+				out.println("Object Name,Object UUID,Location,Owner,SubItem Name,Reason");
+			} catch (IOException e) {
+				System.err.println("Failed to initialize audit report: " + e.getMessage());
+			}
+
 			Thread sweepThread = new Thread(() -> sweepGrid());
 			sweepThread.setName("Auditor Sweep Thread");
 			sweepThread.start();
