@@ -25,6 +25,8 @@ public class Auditor extends Handler implements Runnable {
 	private final ConcurrentLinkedQueue<ObjectData> inspectionQueue = new ConcurrentLinkedQueue<>();
 	private final AtomicBoolean isAuditing = new AtomicBoolean(false);
 
+	private final Set<String> reportedVulnerabilities = ConcurrentHashMap.newKeySet();
+
 	private final Set<LLUUID> creatorWhitelist = new HashSet<>();
 
 	// Traversal settings
@@ -145,6 +147,27 @@ public class Auditor extends Handler implements Runnable {
 					Thread.sleep(5000); // Allow time for object updates to stream in
 				}
 			}
+
+			// Drain phase: wait for the inspection queue to process all known objects
+			System.out.println("Sweep complete. Draining queue...");
+			while (!inspectionQueue.isEmpty()) {
+				Thread.sleep(1000);
+			}
+
+			// Network grace period for trailing UDP packets
+			System.out.println("Queue drained. Waiting for trailing network updates...");
+			Thread.sleep(5000);
+
+			// Safely clean up
+			System.out.println("Audit phase fully complete. Cleaning up state.");
+			reportedVulnerabilities.clear();
+			processedObjects.clear();
+			pendingInventoryRequests.clear();
+			filenameToTask.clear();
+			xferFileToObject.clear();
+			activeXfers.clear();
+			xferTimestamps.clear();
+			isAuditing.set(false);
 		} catch (InterruptedException e) {
 			System.out.println("Sweep interrupted.");
 		}
@@ -367,6 +390,11 @@ public class Auditor extends Handler implements Runnable {
 	}
 
 	private void logVulnerability(String objectName, String objectUUID, String location, String owner, String subItemName, String reason) {
+		String compositeKey = objectUUID + ":" + subItemName;
+		if (!reportedVulnerabilities.add(compositeKey)) {
+			return; // Duplicate vulnerability
+		}
+
 		try (PrintWriter out = new PrintWriter(new FileWriter("audit_report.csv", true))) {
 			out.println(String.format("%s,%s,%s,%s,%s,%s",
 				objectName, // Object Name
