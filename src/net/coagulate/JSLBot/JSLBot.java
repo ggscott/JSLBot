@@ -35,6 +35,7 @@ public class JSLBot extends Thread {
 	private final          Object               circuitsequencelock =new Object();
 	public                 boolean              registershutdownhook=true;
 	public                 boolean              alwaysReconnect;
+	public static final    int                  AGENT_CONTROL_FLY = 0x00002000;
 	public            int     controlflags;
 	Configuration config=new TransientConfiguration();
 	JSLInterface  jslinterface;

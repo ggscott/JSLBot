@@ -549,6 +549,29 @@ public class CnC extends Handler {
 	}
 	
 	@Nonnull
+	@CmdHelp(description="Toggle flying on or off")
+	public String flyCommand(final CommandEvent event,
+	                         @Nullable @Param(name="enable", description="1/0, true/false, on/off, yes/no to set state. Blank to query.") final String enableStr) {
+		if (enableStr == null || enableStr.isEmpty()) {
+			boolean isFlying = (bot.controlflags & JSLBot.AGENT_CONTROL_FLY) != 0;
+			return isFlying ? "Flying is enabled" : "Flying is disabled";
+		}
+
+		String lc = enableStr.toLowerCase();
+		boolean enable = lc.equals("1") || lc.equals("true") || lc.equals("on") || lc.equals("yes");
+
+		if (enable) {
+			bot.controlflags |= JSLBot.AGENT_CONTROL_FLY;
+		} else {
+			bot.controlflags &= ~JSLBot.AGENT_CONTROL_FLY;
+		}
+
+		bot.forceAgentUpdate();
+
+		return enable ? "Flying is enabled" : "Flying is disabled";
+	}
+
+	@Nonnull
 	@CmdHelp(description="Say a message in local chat")
 	public String sayCommand(final CommandEvent event,
 	                         @Param(name="message", description="Message to say") @Nonnull final String message) {
