@@ -98,7 +98,7 @@ public class Test {
 		m.put("firstname",firstname);
 		m.put("lastname",lastname);
 		m.put("CnC.authoriser","OwnerOnly");
-		m.put("handlers","CnC,Sink,Health,Regions,Teleportation,Agent,Objects,Groups,Inventory");
+		m.put("handlers","CnC,Sink,Health,Regions,Teleportation,Agent,Objects,Groups,Inventory,Auditor");
 		m.put("loginlocation","home");
 		m.put("CnC.authorisation.owneruuid",owneruuid);
 		m.put("CnC.authorisation.ownerusername",ownername);

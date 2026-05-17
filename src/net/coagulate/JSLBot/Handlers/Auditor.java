@@ -1,0 +1,383 @@
+package net.coagulate.JSLBot.Handlers;
+
+import net.coagulate.JSLBot.*;
+import net.coagulate.JSLBot.JSLBot.CmdHelp;
+import net.coagulate.JSLBot.JSLBot.Param;
+import net.coagulate.JSLBot.Packets.Messages.*;
+import net.coagulate.JSLBot.Packets.Types.*;
+import net.coagulate.JSLBot.LLSD.*;
+
+import javax.annotation.Nonnull;
+import java.io.IOException;
+import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.io.FileWriter;
+import java.io.PrintWriter;
+import java.nio.ByteBuffer;
+import java.io.File;
+
+public class Auditor extends Handler implements Runnable {
+	private final Set<Integer> processedObjects = ConcurrentHashMap.newKeySet();
+	private final Map<LLUUID, ObjectData> pendingInventoryRequests = new ConcurrentHashMap<>();
+	private final Map<String, LLUUID> filenameToTask = new ConcurrentHashMap<>();
+	private final ConcurrentLinkedQueue<ObjectData> inspectionQueue = new ConcurrentLinkedQueue<>();
+	private final AtomicBoolean isAuditing = new AtomicBoolean(false);
+
+	private final Set<LLUUID> creatorWhitelist = new HashSet<>();
+
+	// Traversal settings
+	private static final float GRID_MIN_X = 16.0f;
+	private static final float GRID_MAX_X = 240.0f;
+	private static final float GRID_MIN_Y = 16.0f;
+	private static final float GRID_MAX_Y = 240.0f;
+	private static final float GRID_STEP = 64.0f;
+
+	public Auditor(@Nonnull final JSLBot bot, final Configuration config) {
+		super(bot, config);
+		String whitelist = config.get("creatorWhitelist", "");
+		if (!whitelist.isEmpty()) {
+			for (String uuidStr : whitelist.split(",")) {
+				creatorWhitelist.add(new LLUUID(uuidStr));
+			}
+		}
+	}
+
+	private void saveWhitelist() {
+		StringBuilder sb = new StringBuilder();
+		for (LLUUID uuid : creatorWhitelist) {
+			if (sb.length() > 0) sb.append(",");
+			sb.append(uuid.toString());
+		}
+		config.put("creatorWhitelist", sb.toString());
+	}
+
+	@Override
+	public void loggedIn() {
+		Thread t = new Thread(this);
+		t.setName("Auditor Thread");
+		t.start();
+	}
+
+	@Override
+	public void run() {
+		while (true) {
+			if (isAuditing.get()) {
+				// Process inspection queue (throttle to avoid flooding)
+				processInspectionQueue();
+			}
+			try {
+				Thread.sleep(50); // 20 times a second
+			} catch (InterruptedException e) {
+				break;
+			}
+			cleanupStaleXfers();
+		}
+	}
+
+	private void cleanupStaleXfers() {
+		long now = System.currentTimeMillis();
+		List<Long> toRemove = new ArrayList<>();
+		for (Map.Entry<Long, Long> entry : xferTimestamps.entrySet()) {
+			if (now - entry.getValue() > 10000) { // 10 seconds timeout
+				toRemove.add(entry.getKey());
+			}
+		}
+		for (Long staleXfer : toRemove) {
+			xferTimestamps.remove(staleXfer);
+			activeXfers.remove(staleXfer);
+			System.out.println("Cleaned up stale xfer: " + staleXfer);
+		}
+	}
+
+	public void objectPropertiesFamilyUDPImmediate(@Nonnull final UDPEvent event) {
+		@Nonnull final ObjectPropertiesFamily object=(ObjectPropertiesFamily)event.body();
+		int nextOwnerMask = object.bobjectdata.vnextownermask.value;
+		LLUUID objectId = object.bobjectdata.vobjectid;
+		String name = object.bobjectdata.vname.toString();
+
+		boolean hasTransfer = (nextOwnerMask & 0x00002000) != 0;
+		boolean hasCopy = (nextOwnerMask & 0x00008000) != 0;
+		boolean flagBoth = hasTransfer && hasCopy;
+
+		if (flagBoth) {
+			String reason = "Root Object Copy+Transfer";
+			System.out.println("VULNERABILITY FOUND: " + name + " - " + reason);
+			String owner = object.bobjectdata.vownerid.toString();
+			ObjectData od = event.region().getObject(object.bobjectdata.vobjectid);
+			String location = od != null ? String.format("%.2f, %.2f, %.2f", od.getX(), od.getY(), od.getZ()) : "Unknown Loc";
+			logVulnerability(name, objectId.toString(), location, owner, name, reason);
+		}
+	}
+
+	@Nonnull
+	@CmdHelp(description="Add creator to whitelist")
+	public String whitelistcreatorCommand(@Nonnull final CommandEvent command,
+										  @Nonnull @Param(name="creatoruuid", description="Creator UUID") final String creatoruuid) {
+		creatorWhitelist.add(new LLUUID(creatoruuid));
+		saveWhitelist();
+		return "Added to whitelist.";
+	}
+
+	@Nonnull
+	@CmdHelp(description="Start the IP permissions audit sweep")
+	public String startAuditCommand(@Nonnull final CommandEvent command) {
+		if (isAuditing.compareAndSet(false, true)) {
+			Thread sweepThread = new Thread(() -> sweepGrid());
+			sweepThread.setName("Auditor Sweep Thread");
+			sweepThread.start();
+			return "Audit sweep started.";
+		} else {
+			return "Audit sweep is already running.";
+		}
+	}
+
+	private void sweepGrid() {
+		try {
+			// Fly around the grid to discover objects
+			for (float x = GRID_MIN_X; x <= GRID_MAX_X; x += GRID_STEP) {
+				for (float y = GRID_MIN_Y; y <= GRID_MAX_Y; y += GRID_STEP) {
+					if (!isAuditing.get()) return;
+					bot.setPos(x, y, 50.0f); // Default height
+					bot.forceAgentUpdate();
+					System.out.println("Sweeping position: " + x + ", " + y);
+					Thread.sleep(5000); // Allow time for object updates to stream in
+				}
+			}
+		} catch (InterruptedException e) {
+			System.out.println("Sweep interrupted.");
+		}
+	}
+
+	// Hook into object discovery
+	public void objectUpdateUDPImmediate(@Nonnull final UDPEvent event) {
+		@Nonnull final ObjectUpdate data=(ObjectUpdate)event.body();
+		for (@Nonnull final ObjectUpdate_bObjectData obj: data.bobjectdata) {
+			queueForInspection(event.region().getObject(obj.vid.value));
+		}
+	}
+
+	public void objectUpdateCachedUDPImmediate(@Nonnull final UDPEvent event) {
+		@Nonnull final ObjectUpdateCached objectUpdateCached=(ObjectUpdateCached)event.body();
+		for (@Nonnull final ObjectUpdateCached_bObjectData data: objectUpdateCached.bobjectdata) {
+			final int id=data.vid.value;
+			if (event.region().hasObject(id)) {
+				queueForInspection(event.region().getObject(id));
+			}
+		}
+	}
+
+	public void objectUpdateCompressedUDPImmediate(@Nonnull final UDPEvent event) {
+		@Nonnull final ObjectUpdateCompressed ouc=(ObjectUpdateCompressed)event.body();
+		for (@Nonnull final ObjectUpdateCompressed_bObjectData data: ouc.bobjectdata) {
+			@Nonnull final ByteBuffer buffer=ByteBuffer.wrap(data.vdata.value);
+			@Nonnull final LLUUID uuid=new LLUUID(buffer);
+			final int localid=new U32(buffer).value;
+			if (event.region().hasObject(localid)) {
+				queueForInspection(event.region().getObject(localid));
+			}
+		}
+	}
+
+	public void multipleObjectUpdateUDPImmediate(@Nonnull final UDPEvent event) {
+		@Nonnull final MultipleObjectUpdate msg=(MultipleObjectUpdate)event.body();
+		for (@Nonnull final MultipleObjectUpdate_bObjectData data: msg.bobjectdata) {
+			final int localid = data.vobjectlocalid.value;
+			if (event.region().hasObject(localid)) {
+				queueForInspection(event.region().getObject(localid));
+			}
+		}
+	}
+
+	private void queueForInspection(ObjectData od) {
+		if (od != null && isAuditing.get()) {
+			if (processedObjects.add(od.id.value)) { // returns true if not already present
+				inspectionQueue.add(od);
+			}
+		}
+	}
+
+	private void processInspectionQueue() {
+		ObjectData od = inspectionQueue.poll();
+		if (od != null && od.fullid != null) {
+			if (!creatorWhitelist.isEmpty()) {
+				// We don't have creator id right away in ObjectData, but we do have owner
+				// Actually we should filter later or filter if we can fetch owner.
+				// Often, creator isn't available without a further properties request,
+				// but we can at least filter by owner if the whitelist applies to owners too.
+				// The prompt says "CreatorID (or OwnerID if you retain ownership...)".
+				// We will filter by owner.
+				if (od.owner != null && !creatorWhitelist.contains(od.owner)) {
+					return; // Drop if not owned by a whitelist member.
+				}
+			}
+
+			// Request root object properties for geometry checking
+			RequestObjectPropertiesFamily propReq = new RequestObjectPropertiesFamily();
+			propReq.bagentdata.vagentid = bot.getUUID();
+			propReq.bagentdata.vsessionid = bot.getSession();
+			propReq.bobjectdata.vobjectid = od.fullid;
+			propReq.bobjectdata.vrequestflags = od.id;
+			bot.send(propReq, true);
+
+			// Ask for the task inventory
+			pendingInventoryRequests.put(od.fullid, od);
+			RequestTaskInventory req = new RequestTaskInventory();
+			req.bagentdata.vagentid = bot.getUUID();
+			req.bagentdata.vsessionid = bot.getSession();
+			req.binventorydata.vlocalid = od.id;
+			bot.send(req, true);
+		}
+	}
+
+	// Map of filename -> object data, to associate xfer with the object
+	private final Map<String, ObjectData> xferFileToObject = new ConcurrentHashMap<>();
+	// Map of xfer id -> byte array stream (we'll just use a byte array builder)
+	private final Map<Long, List<byte[]>> activeXfers = new ConcurrentHashMap<>();
+	// Track timestamp of active transfers to manage timeouts
+	private final Map<Long, Long> xferTimestamps = new ConcurrentHashMap<>();
+
+	public void replyTaskInventoryUDPImmediate(@Nonnull final UDPEvent event) {
+		@Nonnull final ReplyTaskInventory msg = (ReplyTaskInventory)event.body();
+		String filename = msg.binventorydata.vfilename.toString();
+		LLUUID taskid = msg.binventorydata.vtaskid;
+		if (filename != null && !filename.isEmpty()) {
+			if (taskid != null) {
+				filenameToTask.put(filename, taskid);
+			}
+			// Issue RequestXfer
+			RequestXfer req = new RequestXfer();
+			req.bxferid.vid = new U64("0"); // Server uses 0 for a new request ID usually
+			req.bxferid.vfilename = msg.binventorydata.vfilename;
+			req.bxferid.vfilepath = new U8(0);
+			req.bxferid.vdeleteoncompletion = new BOOL();
+			req.bxferid.vdeleteoncompletion.value = 0;
+			req.bxferid.vusebigpackets = new BOOL();
+			req.bxferid.vusebigpackets.value = 0;
+			req.bxferid.vvfileid = new LLUUID();
+			req.bxferid.vvfiletype = new S16();
+			req.bxferid.vvfiletype.value = (short)0;
+
+			bot.send(req, true);
+		}
+	}
+
+	public void sendXferPacketUDPImmediate(@Nonnull final UDPEvent event) {
+		@Nonnull final SendXferPacket msg = (SendXferPacket)event.body();
+		long xferId = msg.bxferid.vid.value;
+		int packetNum = msg.bxferid.vpacket.value;
+		byte[] data = msg.bdatapacket.vdata.value;
+
+		// The protocol sets the MSB (highest bit) of packet number for the final packet.
+		boolean isFinal = (packetNum & 0x80000000) != 0;
+		packetNum = packetNum & 0x7FFFFFFF;
+
+		activeXfers.computeIfAbsent(xferId, k -> new ArrayList<>()).add(data);
+		xferTimestamps.put(xferId, System.currentTimeMillis());
+
+		// Acknowledge
+		ConfirmXferPacket ack = new ConfirmXferPacket();
+		ack.bxferid.vid = msg.bxferid.vid;
+		ack.bxferid.vpacket = msg.bxferid.vpacket; // Use raw packet number for ACK
+		bot.send(ack, true);
+
+		if (isFinal) {
+			xferTimestamps.remove(xferId);
+			List<byte[]> chunks = activeXfers.remove(xferId);
+			if (chunks != null) {
+				int totalLength = chunks.stream().mapToInt(c -> c.length).sum();
+				byte[] fullPayload = new byte[totalLength];
+				int offset = 0;
+				for (byte[] chunk : chunks) {
+					System.arraycopy(chunk, 0, fullPayload, offset, chunk.length);
+					offset += chunk.length;
+				}
+				processTaskInventory(xferId, fullPayload);
+			}
+		}
+	}
+
+	private void processTaskInventory(long xferId, byte[] fullPayload) {
+		try {
+			// Extract LLSD representation of the inventory tree
+			String llsdString = new String(fullPayload, "UTF-8");
+			LLSD document = new LLSD(llsdString);
+			if (document.getFirst() instanceof LLSDMap) {
+				LLSDMap topLevel = (LLSDMap)document.getFirst();
+				if (topLevel.get("folders") instanceof LLSDArray) {
+					LLSDArray folders = (LLSDArray)topLevel.get("folders");
+					for (Atomic folderAtomic : folders.get()) {
+						if (folderAtomic instanceof LLSDMap) {
+							LLSDMap folder = (LLSDMap)folderAtomic;
+							if (folder.get("items") instanceof LLSDArray) {
+								LLSDArray items = (LLSDArray)folder.get("items");
+								for (Atomic itemAtomic : items.get()) {
+									if (itemAtomic instanceof LLSDMap) {
+										LLSDMap item = (LLSDMap)itemAtomic;
+										int invType = ((LLSDInteger)item.get("inv_type")).get();
+										int type = ((LLSDInteger)item.get("type")).get();
+										int nextOwnerMask = 0;
+										Atomic permissions = item.get("permissions");
+										if (permissions instanceof LLSDMap) {
+											LLSDMap permsMap = (LLSDMap)permissions;
+											Atomic nextOwnerAtomic = permsMap.get("next_owner_mask");
+											if (nextOwnerAtomic instanceof LLSDInteger) {
+												nextOwnerMask = ((LLSDInteger)nextOwnerAtomic).get();
+											}
+										}
+
+										String name = item.get("name").toString();
+										String objectUUID = item.get("parent_id").toString(); // Usually the object ID when talking about task inventory
+
+										// SL Permissions:
+										// PERM_TRANSFER = 0x00002000 (8192)
+										// PERM_COPY =     0x00008000 (32768)
+										// PERM_MODIFY =   0x00004000 (16384)
+										boolean hasTransfer = (nextOwnerMask & 0x00002000) != 0;
+										boolean hasCopy = (nextOwnerMask & 0x00008000) != 0;
+										boolean hasModify = (nextOwnerMask & 0x00004000) != 0;
+
+										boolean flagBoth = hasTransfer && hasCopy;
+										boolean flagScript = (invType == 10 && hasModify); // LSL Script type is 10
+
+										if (flagBoth || flagScript) {
+											String reason = "";
+											if (flagBoth) reason += "Copy+Transfer ";
+											if (flagScript) reason += "Modifiable Script ";
+
+											System.out.println("VULNERABILITY FOUND: " + name + " - " + reason);
+											LLUUID objId = new LLUUID(objectUUID);
+											ObjectData od = pendingInventoryRequests.get(objId);
+											String objName = od != null && od.name != null ? od.name : "Unknown";
+											String location = od != null ? String.format("%.2f, %.2f, %.2f", od.getX(), od.getY(), od.getZ()) : "Unknown Loc";
+											String owner = od != null && od.owner != null ? od.owner.toString() : "Unknown Owner";
+											logVulnerability(objName, objectUUID, location, owner, name, reason);
+										}
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		} catch (Exception e) {
+			System.err.println("Failed to parse task inventory: " + e.getMessage());
+		}
+	}
+
+	private void logVulnerability(String objectName, String objectUUID, String location, String owner, String subItemName, String reason) {
+		try (PrintWriter out = new PrintWriter(new FileWriter("audit_report.csv", true))) {
+			out.println(String.format("%s,%s,%s,%s,%s,%s",
+				objectName, // Object Name
+				objectUUID,
+				location, // Location
+				owner, // Owner
+				subItemName,
+				reason
+			));
+		} catch (IOException e) {
+			System.err.println("Failed to log vulnerability: " + e.getMessage());
+		}
+	}
+}

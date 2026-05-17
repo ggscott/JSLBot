@@ -4,6 +4,7 @@ import net.coagulate.JSLBot.*;
 import net.coagulate.JSLBot.JSLBot.CmdHelp;
 import net.coagulate.JSLBot.JSLBot.Param;
 import net.coagulate.JSLBot.Packets.Messages.*;
+import net.coagulate.JSLBot.Packets.Packet;
 import net.coagulate.JSLBot.Packets.Types.LLUUID;
 import net.coagulate.JSLBot.Packets.Types.LLVector3;
 import net.coagulate.JSLBot.Packets.Types.U64;
@@ -223,6 +224,14 @@ public class Agent extends Handler {
 			}
 		}
 	}
+
+	public void avatarSitResponseUDPImmediate(@Nonnull final UDPEvent event) {
+		@Nonnull final AvatarSitResponse sitresponse=(AvatarSitResponse)event.body();
+		log.info("Received AvatarSitResponse for object "+sitresponse.bsitobject.vid);
+		@Nonnull final AgentSit sit=new AgentSit(bot);
+		bot.send(sit,true);
+		log.info("Sent AgentSit");
+	}
 	
 	@Nonnull
 	@CmdHelp(description="Have the avatar sit on an object")
@@ -232,7 +241,10 @@ public class Agent extends Handler {
 		@Nonnull final AgentRequestSit sit=new AgentRequestSit(bot);
 		sit.btargetobject.vtargetid=new LLUUID(uuid);
 		sit.btargetobject.voffset=new LLVector3(0,0,0);
-		bot.send(sit,true);
+		@Nonnull final Packet p=new Packet(sit);
+		p.setReliable(false);
+		p.setZeroCode(true);
+		bot.send(p);
 		return "0 - Sit request sent";
 	}
 	

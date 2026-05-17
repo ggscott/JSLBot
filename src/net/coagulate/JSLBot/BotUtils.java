@@ -297,6 +297,7 @@ public abstract class BotUtils {
 		req.add("FetchLibDescendents2");
 		req.add("FetchInventory2");
 		req.add("FetchInventoryDescendents2");
+		req.add("FetchTaskInventory");
 		req.add("IncrementCOFVersion");
 		req.add("GetDisplayNames");
 		req.add("GetExperiences");
