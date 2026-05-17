@@ -34,7 +34,10 @@ public class Auditor extends Handler implements Runnable {
 	private static final float GRID_MAX_X = 240.0f;
 	private static final float GRID_MIN_Y = 16.0f;
 	private static final float GRID_MAX_Y = 240.0f;
+	private static final float GRID_MIN_Z = 20.0f;
+	private static final float GRID_MAX_Z = 4096.0f;
 	private static final float GRID_STEP = 64.0f;
+	private static final float GRID_STEP_Z = 64.0f;
 
 	public Auditor(@Nonnull final JSLBot bot, final Configuration config) {
 		super(bot, config);
@@ -157,27 +160,29 @@ public class Auditor extends Handler implements Runnable {
 	private void sweepGrid() {
 		try {
 			// Fly around the grid to discover objects
-			for (float x = GRID_MIN_X; x <= GRID_MAX_X; x += GRID_STEP) {
-				for (float y = GRID_MIN_Y; y <= GRID_MAX_Y; y += GRID_STEP) {
-					if (!isAuditing.get()) return;
-					// Physically teleport the bot to ensure object discovery streams all sim objects
-					TeleportLocationRequest tp = new TeleportLocationRequest();
-					tp.bagentdata.vagentid = bot.getUUID();
-					tp.bagentdata.vsessionid = bot.getSession();
-					tp.binfo.vposition = new LLVector3(x, y, 50.0f);
-					tp.binfo.vlookat = new LLVector3(x + 1.0f, y, 50.0f);
-					tp.binfo.vregionhandle = new U64();
-					tp.binfo.vregionhandle.value = bot.getRegional().handle();
-					bot.send(tp, true);
+			for (float z = GRID_MIN_Z; z <= GRID_MAX_Z; z += GRID_STEP_Z) {
+				for (float x = GRID_MIN_X; x <= GRID_MAX_X; x += GRID_STEP) {
+					for (float y = GRID_MIN_Y; y <= GRID_MAX_Y; y += GRID_STEP) {
+						if (!isAuditing.get()) return;
+						// Physically teleport the bot to ensure object discovery streams all sim objects
+						TeleportLocationRequest tp = new TeleportLocationRequest();
+						tp.bagentdata.vagentid = bot.getUUID();
+						tp.bagentdata.vsessionid = bot.getSession();
+						tp.binfo.vposition = new LLVector3(x, y, z);
+						tp.binfo.vlookat = new LLVector3(x + 1.0f, y, z);
+						tp.binfo.vregionhandle = new U64();
+						tp.binfo.vregionhandle.value = bot.getRegional().handle();
+						bot.send(tp, true);
 
-					System.out.println("Sweeping position: " + x + ", " + y + " | Objects reviewed: " + processedObjects.size());
+						System.out.println("Sweeping position: " + x + ", " + y + ", " + z + " | Objects reviewed: " + processedObjects.size());
 
-					// Wait for the teleport to complete over the async network protocol.
-					// This prevents "CouldntTPCloser" errors that happen when sending agent movement completes
-					// immediately after teleporting before the sim is ready.
-					Thread.sleep(5000);
-					bot.setPos(x, y, 50.0f); // Default height
-					bot.forceAgentUpdate();
+						// Wait for the teleport to complete over the async network protocol.
+						// This prevents "CouldntTPCloser" errors that happen when sending agent movement completes
+						// immediately after teleporting before the sim is ready.
+						Thread.sleep(5000);
+						bot.setPos(x, y, z); // Update height
+						bot.forceAgentUpdate();
+					}
 				}
 			}
 
