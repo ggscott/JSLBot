@@ -143,7 +143,7 @@ public class Auditor extends Handler implements Runnable {
 					if (!isAuditing.get()) return;
 					bot.setPos(x, y, 50.0f); // Default height
 					bot.forceAgentUpdate();
-					System.out.println("Sweeping position: " + x + ", " + y);
+					System.out.println("Sweeping position: " + x + ", " + y + " | Objects reviewed: " + processedObjects.size());
 					Thread.sleep(5000); // Allow time for object updates to stream in
 				}
 			}
@@ -159,7 +159,7 @@ public class Auditor extends Handler implements Runnable {
 			Thread.sleep(5000);
 
 			// Safely clean up
-			System.out.println("Audit phase fully complete. Cleaning up state.");
+			System.out.println("Audit sweep ended run. Total objects reviewed: " + processedObjects.size());
 			reportedVulnerabilities.clear();
 			processedObjects.clear();
 			pendingInventoryRequests.clear();
