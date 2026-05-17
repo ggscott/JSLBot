@@ -17,6 +17,7 @@ import java.io.FileWriter;
 import java.io.PrintWriter;
 import java.nio.ByteBuffer;
 import java.io.File;
+import java.text.SimpleDateFormat;
 
 public class Auditor extends Handler implements Runnable {
 	private final Set<Integer> processedObjects = ConcurrentHashMap.newKeySet();
@@ -27,7 +28,9 @@ public class Auditor extends Handler implements Runnable {
 
 	private final Set<String> reportedVulnerabilities = ConcurrentHashMap.newKeySet();
 
-	private final Set<LLUUID> creatorWhitelist = new HashSet<>();
+	private final Set<LLUUID> objectWhitelist = new HashSet<>();
+
+	private String currentAuditReportFile = "audit_report.csv";
 
 	// Traversal settings
 	private static final float GRID_MIN_X = 16.0f;
@@ -41,21 +44,21 @@ public class Auditor extends Handler implements Runnable {
 
 	public Auditor(@Nonnull final JSLBot bot, final Configuration config) {
 		super(bot, config);
-		String whitelist = config.get("creatorWhitelist", "");
+		String whitelist = config.get("objectWhitelist", "");
 		if (!whitelist.isEmpty()) {
 			for (String uuidStr : whitelist.split(",")) {
-				creatorWhitelist.add(new LLUUID(uuidStr));
+				objectWhitelist.add(new LLUUID(uuidStr));
 			}
 		}
 	}
 
 	private void saveWhitelist() {
 		StringBuilder sb = new StringBuilder();
-		for (LLUUID uuid : creatorWhitelist) {
+		for (LLUUID uuid : objectWhitelist) {
 			if (sb.length() > 0) sb.append(",");
 			sb.append(uuid.toString());
 		}
-		config.put("creatorWhitelist", sb.toString());
+		config.put("objectWhitelist", sb.toString());
 	}
 
 	@Override
@@ -119,6 +122,10 @@ public class Auditor extends Handler implements Runnable {
 		// Note: We don't have invType here, so we skip the script specific checks
 		// for the root object since it's an object, not a script item.
 
+		if (objectWhitelist.contains(objectId)) {
+			return; // Whitelisted object, skip logging
+		}
+
 		if (publicTheft || publicGriefing || groupTheft || groupTampering || accidentalFullPerm) {
 			String reason = "";
 			if (publicTheft) reason += "Root Object Public Theft Risk ";
@@ -130,16 +137,19 @@ public class Auditor extends Handler implements Runnable {
 			System.out.println("VULNERABILITY FOUND: " + name + " - " + reason);
 			String owner = object.bobjectdata.vownerid.toString();
 			ObjectData od = event.region().getObject(object.bobjectdata.vobjectid);
-			String location = od != null ? String.format("%.2f, %.2f, %.2f", od.getX(), od.getY(), od.getZ()) : "Unknown Loc";
+			String location = "Unknown Loc";
+			if (od != null && od.getX() >= 0 && od.getY() >= 0 && od.getZ() >= 0) {
+				location = String.format("secondlife://%s/%.0f/%.0f/%.0f", bot.getRegionName(), od.getX(), od.getY(), od.getZ());
+			}
 			logVulnerability(name, objectId.toString(), location, owner, name, reason);
 		}
 	}
 
 	@Nonnull
-	@CmdHelp(description="Add creator to whitelist")
-	public String whitelistcreatorCommand(@Nonnull final CommandEvent command,
-										  @Nonnull @Param(name="creatoruuid", description="Creator UUID") final String creatoruuid) {
-		creatorWhitelist.add(new LLUUID(creatoruuid));
+	@CmdHelp(description="Add object to whitelist")
+	public String whitelistobjectCommand(@Nonnull final CommandEvent command,
+										  @Nonnull @Param(name="objectuuid", description="Object UUID") final String objectuuid) {
+		objectWhitelist.add(new LLUUID(objectuuid));
 		saveWhitelist();
 		return "Added to whitelist.";
 	}
@@ -148,10 +158,12 @@ public class Auditor extends Handler implements Runnable {
 	@CmdHelp(description="Start the IP permissions audit sweep")
 	public String startAuditCommand(@Nonnull final CommandEvent command) {
 		if (isAuditing.compareAndSet(false, true)) {
+			SimpleDateFormat sdf = new SimpleDateFormat("yyyyMMdd_HHmmss");
+			currentAuditReportFile = "audit_report_" + sdf.format(new Date()) + ".csv";
 			Thread sweepThread = new Thread(() -> sweepGrid());
 			sweepThread.setName("Auditor Sweep Thread");
 			sweepThread.start();
-			return "Audit sweep started.";
+			return "Audit sweep started. Logging to " + currentAuditReportFile;
 		} else {
 			return "Audit sweep is already running.";
 		}
@@ -198,6 +210,7 @@ public class Auditor extends Handler implements Runnable {
 
 			// Safely clean up
 			System.out.println("Audit sweep ended run. Total objects reviewed: " + processedObjects.size());
+			currentAuditReportFile = "audit_report.csv"; // reset to default
 			reportedVulnerabilities.clear();
 			processedObjects.clear();
 			pendingInventoryRequests.clear();
@@ -262,17 +275,6 @@ public class Auditor extends Handler implements Runnable {
 	private void processInspectionQueue() {
 		ObjectData od = inspectionQueue.poll();
 		if (od != null && od.fullid != null) {
-			if (!creatorWhitelist.isEmpty()) {
-				// We don't have creator id right away in ObjectData, but we do have owner
-				// Actually we should filter later or filter if we can fetch owner.
-				// Often, creator isn't available without a further properties request,
-				// but we can at least filter by owner if the whitelist applies to owners too.
-				// The prompt says "CreatorID (or OwnerID if you retain ownership...)".
-				// We will filter by owner.
-				if (od.owner != null && !creatorWhitelist.contains(od.owner)) {
-					return; // Drop if not owned by a whitelist member.
-				}
-			}
 
 			// Request root object properties for geometry checking
 			RequestObjectPropertiesFamily propReq = new RequestObjectPropertiesFamily();
@@ -422,6 +424,11 @@ public class Auditor extends Handler implements Runnable {
 										boolean liveScriptTampering = isScript && ((groupMask & 0x00004000) != 0 || (everyoneMask & 0x00004000) != 0);
 										boolean sourceCodeLeak = isScript && noModify;
 
+										LLUUID objId = new LLUUID(objectUUID);
+										if (objectWhitelist.contains(objId)) {
+											continue; // Whitelisted object, skip logging
+										}
+
 										if (publicTheft || publicGriefing || groupTheft || groupTampering || accidentalFullPerm || liveScriptTampering || sourceCodeLeak) {
 											String reason = "";
 											if (publicTheft) reason += "Public Theft Risk ";
@@ -433,10 +440,12 @@ public class Auditor extends Handler implements Runnable {
 											if (sourceCodeLeak) reason += "IP Risk: Exposed LSL Source Code ";
 
 											System.out.println("VULNERABILITY FOUND: " + name + " - " + reason);
-											LLUUID objId = new LLUUID(objectUUID);
 											ObjectData od = pendingInventoryRequests.get(objId);
 											String objName = od != null && od.name != null ? od.name : "Unknown";
-											String location = od != null ? String.format("%.2f, %.2f, %.2f", od.getX(), od.getY(), od.getZ()) : "Unknown Loc";
+											String location = "Unknown Loc";
+											if (od != null && od.getX() >= 0 && od.getY() >= 0 && od.getZ() >= 0) {
+												location = String.format("secondlife://%s/%.0f/%.0f/%.0f", bot.getRegionName(), od.getX(), od.getY(), od.getZ());
+											}
 											String owner = od != null && od.owner != null ? od.owner.toString() : "Unknown Owner";
 											logVulnerability(objName, objectUUID, location, owner, name, reason);
 										}
@@ -453,12 +462,12 @@ public class Auditor extends Handler implements Runnable {
 	}
 
 	private void logVulnerability(String objectName, String objectUUID, String location, String owner, String subItemName, String reason) {
-		String compositeKey = objectUUID + ":" + subItemName;
+		String compositeKey = objectUUID + ":" + subItemName + ":" + reason;
 		if (!reportedVulnerabilities.add(compositeKey)) {
 			return; // Duplicate vulnerability
 		}
 
-		try (PrintWriter out = new PrintWriter(new FileWriter("audit_report.csv", true))) {
+		try (PrintWriter out = new PrintWriter(new FileWriter(currentAuditReportFile, true))) {
 			out.println(String.format("%s,%s,%s,%s,%s,%s",
 				objectName, // Object Name
 				objectUUID,
