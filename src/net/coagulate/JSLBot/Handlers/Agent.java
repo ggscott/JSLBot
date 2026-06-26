@@ -225,11 +225,10 @@ public class Agent extends Handler {
 		}
 	}
 
-	public void avatarSitResponseUDPImmediate(@Nonnull final UDPEvent event) {
-		@Nonnull final AvatarSitResponse sitresponse=(AvatarSitResponse)event.body();
-		log.info("Received AvatarSitResponse for object "+sitresponse.bsitobject.vid);
+	 public void avatarSitResponseUDPImmediate(@Nonnull final UDPEvent event) {
+		log.info("Received AvatarSitResponse");
 		@Nonnull final AgentSit sit=new AgentSit(bot);
-		bot.send(sit,true);
+		bot.send(sit);
 		log.info("Sent AgentSit");
 	}
 	
@@ -238,6 +237,9 @@ public class Agent extends Handler {
 	public String sitOnCommand(final CommandEvent command,
 	                           @Nonnull @Param(name="uuid", description="UUID of the prim to sit on")
 	                           final String uuid) {
+		if (uuid == null || uuid.isEmpty()) {
+			return "Error: You must provide a valid UUID. Syntax: *siton uuid <UUID>";
+		}
 		@Nonnull final AgentRequestSit sit=new AgentRequestSit(bot);
 		sit.btargetobject.vtargetid=new LLUUID(uuid);
 		sit.btargetobject.voffset=new LLVector3(0,0,0);
@@ -245,13 +247,14 @@ public class Agent extends Handler {
 		p.setZeroCode(true);
 		p.setReliable(false);
 		bot.send(p);
+		log.info("AgentRequestSit sent for UUID " + uuid);
 		return "0 - Sit request sent";
 	}
 	
-	public void avatarSitResponseUDPImmediate(@Nonnull final UDPEvent event) {
+	/* public void avatarSitResponseUDPImmediate(@Nonnull final UDPEvent event) {
 		@Nonnull final AgentSit sit=new AgentSit(bot);
-		bot.send(sit);
-	}
+		bot.send(sit,true);
+	} */
 
 	@Nonnull
 	@CmdHelp(description="Have the avatar stand")
