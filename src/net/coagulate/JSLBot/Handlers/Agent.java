@@ -242,12 +242,17 @@ public class Agent extends Handler {
 		sit.btargetobject.vtargetid=new LLUUID(uuid);
 		sit.btargetobject.voffset=new LLVector3(0,0,0);
 		@Nonnull final Packet p=new Packet(sit);
-		p.setReliable(false);
 		p.setZeroCode(true);
+		p.setReliable(false);
 		bot.send(p);
 		return "0 - Sit request sent";
 	}
 	
+	public void avatarSitResponseUDPImmediate(@Nonnull final UDPEvent event) {
+		@Nonnull final AgentSit sit=new AgentSit(bot);
+		bot.send(sit);
+	}
+
 	@Nonnull
 	@CmdHelp(description="Have the avatar stand")
 	public String standCommand(final CommandEvent command) {
