@@ -160,11 +160,13 @@ public class Regional {
 	@Nonnull
 	public String dumpParcels() {
 		@Nonnull final Map<Byte,Integer> sizes=new HashMap<>();
+		@Nonnull final Map<Byte,String> coords=new HashMap<>();
 		for (int x=0;x<64;x++) {
 			for (int y=0;y<64;y++) {
 				final byte id=parcelgrid[x][y];
 				if (!sizes.containsKey(id)) {
 					sizes.put(id,0);
+					coords.put(id, (x * 4) + "," + (y * 4));
 				}
 				sizes.put(id,sizes.get(id)+16);
 			}
@@ -175,6 +177,7 @@ public class Regional {
 			resp.append("\n");
 			resp.append("#byeid#").append(entry.getKey()&0xff);
 			resp.append(" ").append(entry.getValue()).append("m2");
+			resp.append(" at ").append(coords.get(entry.getKey()));
 			totalsize+=entry.getValue();
 		}
 		return resp.toString();
